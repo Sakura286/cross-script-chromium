@@ -1,0 +1,362 @@
+diff --git a/compiler/rustc_codegen_llvm/src/back/lto.rs b/compiler/rustc_codegen_llvm/src/back/lto.rs
+index 42bd8687042..6c204b7ab2b 100644
+--- a/compiler/rustc_codegen_llvm/src/back/lto.rs
++++ b/compiler/rustc_codegen_llvm/src/back/lto.rs
+@@ -607,7 +607,7 @@ pub(crate) fn run_pass_manager(
+             "LTOPostLink".as_ptr().cast(),
+             11,
+         ) {
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 module.module_llvm.llmod(),
+                 llvm::LLVMModFlagBehavior::Error,
+                 c"LTOPostLink".as_ptr().cast(),
+diff --git a/compiler/rustc_codegen_llvm/src/context.rs b/compiler/rustc_codegen_llvm/src/context.rs
+index f3b2caf9b80..dc34e01a4e5 100644
+--- a/compiler/rustc_codegen_llvm/src/context.rs
++++ b/compiler/rustc_codegen_llvm/src/context.rs
+@@ -223,13 +223,13 @@ pub unsafe fn create_module<'ll>(
+     // to ensure intrinsic calls don't use it.
+     if !sess.needs_plt() {
+         let avoid_plt = c"RtLibUseGOT".as_ptr().cast();
+-        llvm::LLVMRustAddModuleFlag(llmod, llvm::LLVMModFlagBehavior::Warning, avoid_plt, 1);
++        llvm::LLVMRustAddModuleFlagU32(llmod, llvm::LLVMModFlagBehavior::Warning, avoid_plt, 1);
+     }
+ 
+     // Enable canonical jump tables if CFI is enabled. (See https://reviews.llvm.org/D65629.)
+     if sess.is_sanitizer_cfi_canonical_jump_tables_enabled() && sess.is_sanitizer_cfi_enabled() {
+         let canonical_jump_tables = c"CFI Canonical Jump Tables".as_ptr().cast();
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Override,
+             canonical_jump_tables,
+@@ -240,7 +240,7 @@ pub unsafe fn create_module<'ll>(
+     // Enable LTO unit splitting if specified or if CFI is enabled. (See https://reviews.llvm.org/D53891.)
+     if sess.is_split_lto_unit_enabled() || sess.is_sanitizer_cfi_enabled() {
+         let enable_split_lto_unit = c"EnableSplitLTOUnit".as_ptr().cast();
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Override,
+             enable_split_lto_unit,
+@@ -251,7 +251,7 @@ pub unsafe fn create_module<'ll>(
+     // Add "kcfi" module flag if KCFI is enabled. (See https://reviews.llvm.org/D119296.)
+     if sess.is_sanitizer_kcfi_enabled() {
+         let kcfi = c"kcfi".as_ptr().cast();
+-        llvm::LLVMRustAddModuleFlag(llmod, llvm::LLVMModFlagBehavior::Override, kcfi, 1);
++        llvm::LLVMRustAddModuleFlagU32(llmod, llvm::LLVMModFlagBehavior::Override, kcfi, 1);
+     }
+ 
+     // Control Flow Guard is currently only supported by the MSVC linker on Windows.
+@@ -260,7 +260,7 @@ pub unsafe fn create_module<'ll>(
+             CFGuard::Disabled => {}
+             CFGuard::NoChecks => {
+                 // Set `cfguard=1` module flag to emit metadata only.
+-                llvm::LLVMRustAddModuleFlag(
++                llvm::LLVMRustAddModuleFlagU32(
+                     llmod,
+                     llvm::LLVMModFlagBehavior::Warning,
+                     c"cfguard".as_ptr() as *const _,
+@@ -269,7 +269,7 @@ pub unsafe fn create_module<'ll>(
+             }
+             CFGuard::Checks => {
+                 // Set `cfguard=2` module flag to emit metadata and checks.
+-                llvm::LLVMRustAddModuleFlag(
++                llvm::LLVMRustAddModuleFlagU32(
+                     llmod,
+                     llvm::LLVMModFlagBehavior::Warning,
+                     c"cfguard".as_ptr() as *const _,
+@@ -287,26 +287,26 @@ pub unsafe fn create_module<'ll>(
+         };
+ 
+         if sess.target.arch == "aarch64" {
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 llmod,
+                 behavior,
+                 c"branch-target-enforcement".as_ptr().cast(),
+                 bti.into(),
+             );
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 llmod,
+                 behavior,
+                 c"sign-return-address".as_ptr().cast(),
+                 pac_ret.is_some().into(),
+             );
+             let pac_opts = pac_ret.unwrap_or(PacRet { leaf: false, key: PAuthKey::A });
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 llmod,
+                 behavior,
+                 c"sign-return-address-all".as_ptr().cast(),
+                 pac_opts.leaf.into(),
+             );
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 llmod,
+                 behavior,
+                 c"sign-return-address-with-bkey".as_ptr().cast(),
+@@ -322,7 +322,7 @@ pub unsafe fn create_module<'ll>(
+ 
+     // Pass on the control-flow protection flags to LLVM (equivalent to `-fcf-protection` in Clang).
+     if let CFProtection::Branch | CFProtection::Full = sess.opts.unstable_opts.cf_protection {
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Override,
+             c"cf-protection-branch".as_ptr().cast(),
+@@ -330,7 +330,7 @@ pub unsafe fn create_module<'ll>(
+         )
+     }
+     if let CFProtection::Return | CFProtection::Full = sess.opts.unstable_opts.cf_protection {
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Override,
+             c"cf-protection-return".as_ptr().cast(),
+@@ -339,7 +339,7 @@ pub unsafe fn create_module<'ll>(
+     }
+ 
+     if sess.opts.unstable_opts.virtual_function_elimination {
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Error,
+             c"Virtual Function Elim".as_ptr().cast(),
+@@ -349,7 +349,7 @@ pub unsafe fn create_module<'ll>(
+ 
+     // Set module flag to enable Windows EHCont Guard (/guard:ehcont).
+     if sess.opts.unstable_opts.ehcont_guard {
+-        llvm::LLVMRustAddModuleFlag(
++        llvm::LLVMRustAddModuleFlagU32(
+             llmod,
+             llvm::LLVMModFlagBehavior::Warning,
+             c"ehcontguard".as_ptr() as *const _,
+@@ -374,6 +374,22 @@ pub unsafe fn create_module<'ll>(
+         llvm::LLVMMDNodeInContext(llcx, &name_metadata, 1),
+     );
+ 
++    // Emit RISC-V specific target-abi metadata
++    // to workaround lld as the LTO plugin not
++    // correctly setting target-abi for the LTO object
++    // FIXME: https://github.com/llvm/llvm-project/issues/50591
++    // If llvm_abiname is empty, emit nothing.
++    let llvm_abiname = &sess.target.options.llvm_abiname;
++    if matches!(sess.target.arch.as_ref(), "riscv32" | "riscv64") && !llvm_abiname.is_empty() {
++        llvm::LLVMRustAddModuleFlagString(
++            llmod,
++            llvm::LLVMModFlagBehavior::Error,
++            c"target-abi".as_ptr(),
++            llvm_abiname.as_ptr().cast(),
++            llvm_abiname.len(),
++        );
++    }
++
+     // Add module flags specified via -Z llvm_module_flag
+     for (key, value, behavior) in &sess.opts.unstable_opts.llvm_module_flag {
+         let key = format!("{key}\0");
+@@ -389,7 +405,7 @@ pub unsafe fn create_module<'ll>(
+             // We already checked this during option parsing
+             _ => unreachable!(),
+         };
+-        llvm::LLVMRustAddModuleFlag(llmod, behavior, key.as_ptr().cast(), *value)
++        llvm::LLVMRustAddModuleFlagU32(llmod, behavior, key.as_ptr().cast(), *value)
+     }
+ 
+     llmod
+diff --git a/compiler/rustc_codegen_llvm/src/debuginfo/mod.rs b/compiler/rustc_codegen_llvm/src/debuginfo/mod.rs
+index d3a851b40c0..4fdaa59e0e5 100644
+--- a/compiler/rustc_codegen_llvm/src/debuginfo/mod.rs
++++ b/compiler/rustc_codegen_llvm/src/debuginfo/mod.rs
+@@ -110,7 +110,7 @@ pub fn finalize(&self, sess: &Session) {
+                     .unstable_opts
+                     .dwarf_version
+                     .unwrap_or(sess.target.default_dwarf_version);
+-                llvm::LLVMRustAddModuleFlag(
++                llvm::LLVMRustAddModuleFlagU32(
+                     self.llmod,
+                     llvm::LLVMModFlagBehavior::Warning,
+                     c"Dwarf Version".as_ptr().cast(),
+@@ -118,7 +118,7 @@ pub fn finalize(&self, sess: &Session) {
+                 );
+             } else {
+                 // Indicate that we want CodeView debug information on MSVC
+-                llvm::LLVMRustAddModuleFlag(
++                llvm::LLVMRustAddModuleFlagU32(
+                     self.llmod,
+                     llvm::LLVMModFlagBehavior::Warning,
+                     c"CodeView".as_ptr().cast(),
+@@ -127,7 +127,7 @@ pub fn finalize(&self, sess: &Session) {
+             }
+ 
+             // Prevent bitcode readers from deleting the debug info.
+-            llvm::LLVMRustAddModuleFlag(
++            llvm::LLVMRustAddModuleFlagU32(
+                 self.llmod,
+                 llvm::LLVMModFlagBehavior::Warning,
+                 c"Debug Info Version".as_ptr().cast(),
+diff --git a/compiler/rustc_codegen_llvm/src/llvm/ffi.rs b/compiler/rustc_codegen_llvm/src/llvm/ffi.rs
+index ee73c6b4756..b3d6626088d 100644
+--- a/compiler/rustc_codegen_llvm/src/llvm/ffi.rs
++++ b/compiler/rustc_codegen_llvm/src/llvm/ffi.rs
+@@ -1793,12 +1793,21 @@ pub fn LLVMRustCoverageCreatePGOFuncNameVar(
+     ///
+     /// In order for Rust-C LTO to work, module flags must be compatible with Clang. What
+     /// "compatible" means depends on the merge behaviors involved.
+-    pub fn LLVMRustAddModuleFlag(
++    pub fn LLVMRustAddModuleFlagU32(
+         M: &Module,
+         merge_behavior: LLVMModFlagBehavior,
+         name: *const c_char,
+         value: u32,
+     );
++
++    pub fn LLVMRustAddModuleFlagString(
++        M: &Module,
++        merge_behavior: LLVMModFlagBehavior,
++        name: *const c_char,
++        value: *const c_char,
++        value_len: size_t,
++    );
++
+     pub fn LLVMRustHasModuleFlag(M: &Module, name: *const c_char, len: size_t) -> bool;
+ 
+     pub fn LLVMRustDIBuilderCreate(M: &Module) -> &mut DIBuilder<'_>;
+diff --git a/compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp b/compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp
+index 0df7b7eed11..78b60c36628 100644
+--- a/compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp
++++ b/compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp
+@@ -748,7 +748,7 @@ extern "C" uint32_t LLVMRustVersionMinor() { return LLVM_VERSION_MINOR; }
+ 
+ extern "C" uint32_t LLVMRustVersionMajor() { return LLVM_VERSION_MAJOR; }
+ 
+-extern "C" void LLVMRustAddModuleFlag(
++extern "C" void LLVMRustAddModuleFlagU32(
+     LLVMModuleRef M,
+     Module::ModFlagBehavior MergeBehavior,
+     const char *Name,
+@@ -756,6 +756,16 @@ extern "C" void LLVMRustAddModuleFlag(
+   unwrap(M)->addModuleFlag(MergeBehavior, Name, Value);
+ }
+ 
++extern "C" void LLVMRustAddModuleFlagString(
++    LLVMModuleRef M,
++    Module::ModFlagBehavior MergeBehavior,
++    const char *Name,
++    const char *Value,
++    size_t ValueLen) {
++  unwrap(M)->addModuleFlag(MergeBehavior, Name,
++    MDString::get(unwrap(M)->getContext(), StringRef(Value, ValueLen)));
++}
++
+ extern "C" bool LLVMRustHasModuleFlag(LLVMModuleRef M, const char *Name,
+                                       size_t Len) {
+   return unwrap(M)->getModuleFlag(StringRef(Name, Len)) != nullptr;
+diff --git a/tests/run-make/cross-lang-lto-riscv-abi/cstart.c b/tests/run-make/cross-lang-lto-riscv-abi/cstart.c
+new file mode 100644
+index 00000000000..660469b75a8
+--- /dev/null
++++ b/tests/run-make/cross-lang-lto-riscv-abi/cstart.c
+@@ -0,0 +1,5 @@
++extern void hello();
++
++void _start() {
++    hello();
++}
+diff --git a/tests/run-make/cross-lang-lto-riscv-abi/riscv-xlto.rs b/tests/run-make/cross-lang-lto-riscv-abi/riscv-xlto.rs
+new file mode 100644
+index 00000000000..c31cf27f9ae
+--- /dev/null
++++ b/tests/run-make/cross-lang-lto-riscv-abi/riscv-xlto.rs
+@@ -0,0 +1,9 @@
++#![allow(internal_features)]
++#![feature(no_core, lang_items)]
++#![no_core]
++
++#[lang = "sized"]
++trait Sized {}
++
++#[no_mangle]
++pub fn hello() {}
+diff --git a/tests/run-make/cross-lang-lto-riscv-abi/rmake.rs b/tests/run-make/cross-lang-lto-riscv-abi/rmake.rs
+new file mode 100644
+index 00000000000..2f13cf17169
+--- /dev/null
++++ b/tests/run-make/cross-lang-lto-riscv-abi/rmake.rs
+@@ -0,0 +1,74 @@
++//! Make sure that cross-language LTO works on riscv targets,
++//! which requires extra abi metadata to be emitted.
++//@ needs-matching-clang
++//@ needs-llvm-components riscv
++extern crate run_make_support;
++
++use run_make_support::{bin_name, rustc, tmp_dir};
++use std::{
++    env,
++    path::PathBuf,
++    process::{Command, Output},
++    str,
++};
++
++fn handle_failed_output(output: Output) {
++    eprintln!("output status: `{}`", output.status);
++    eprintln!("=== STDOUT ===\n{}\n\n", String::from_utf8(output.stdout).unwrap());
++    eprintln!("=== STDERR ===\n{}\n\n", String::from_utf8(output.stderr).unwrap());
++    std::process::exit(1)
++}
++
++fn check_target(target: &str, clang_target: &str, carch: &str, is_double_float: bool) {
++    eprintln!("Checking target {target}");
++    // Rust part
++    rustc()
++        .input("riscv-xlto.rs")
++        .crate_type("rlib")
++        .target(target)
++        .panic("abort")
++        .linker_plugin_lto("on")
++        .run();
++    // C part
++    let clang = env::var("CLANG").unwrap();
++    let mut cmd = Command::new(clang);
++    let executable = tmp_dir().join("riscv-xlto");
++    cmd.arg("-target")
++        .arg(clang_target)
++        .arg(format!("-march={carch}"))
++        .arg(format!("-flto=thin"))
++        .arg(format!("-fuse-ld=lld"))
++        .arg("-nostdlib")
++        .arg("-o")
++        .arg(&executable)
++        .arg("cstart.c")
++        .arg(tmp_dir().join("libriscv_xlto.rlib"));
++    eprintln!("{cmd:?}");
++    let output = cmd.output().unwrap();
++    if !output.status.success() {
++        handle_failed_output(output);
++    }
++    // Check that the built binary has correct float abi
++    let llvm_readobj =
++        PathBuf::from(env::var("LLVM_BIN_DIR").unwrap()).join(bin_name("llvm-readobj"));
++    let mut cmd = Command::new(llvm_readobj);
++    cmd.arg("--file-header").arg(executable);
++    eprintln!("{cmd:?}");
++    let output = cmd.output().unwrap();
++    if output.status.success() {
++        assert!(
++            !(is_double_float
++                ^ dbg!(str::from_utf8(&output.stdout).unwrap())
++                    .contains("EF_RISCV_FLOAT_ABI_DOUBLE"))
++        )
++    } else {
++        handle_failed_output(output);
++    }
++}
++
++fn main() {
++    check_target("riscv64gc-unknown-linux-gnu", "riscv64-linux-gnu", "rv64gc", true);
++    check_target("riscv64imac-unknown-none-elf", "riscv64-unknown-elf", "rv64imac", false);
++    check_target("riscv32imac-unknown-none-elf", "riscv32-unknown-elf", "rv32imac", false);
++    check_target("riscv32gc-unknown-linux-gnu", "riscv32-linux-gnu", "rv32gc", true);
++}

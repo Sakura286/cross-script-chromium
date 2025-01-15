@@ -1,0 +1,553 @@
+From 1b169f49a129a5a69a82386b486c8a46ecfc815a Mon Sep 17 00:00:00 2001
+From: ziqingluo-90 <ziqing@udel.edu>
+Date: Fri, 5 Jan 2024 13:39:39 -0800
+Subject: [PATCH 1/3] [-Wunsafe-buffer-usage] Add a new warning for use of
+ two-parameter std::span constructors
+
+Constructing `std::span` objects with the two parameter constructors
+could introduce mismatched bounds information, which defeats the
+purpose of using `std::span`.  Therefore, we warn every use of such
+constructors.
+
+We also plan to incrementally teach `-Wunsafe-buffer-usage` about benign
+usages of those constructors.
+
+rdar://115817781
+---
+ .../Analysis/Analyses/UnsafeBufferUsage.h     |   8 +-
+ .../Analyses/UnsafeBufferUsageGadgets.def     |   8 ++
+ .../clang/Basic/DiagnosticSemaKinds.td        |   3 +
+ clang/lib/Analysis/UnsafeBufferUsage.cpp      |  46 ++++++
+ clang/lib/Sema/AnalysisBasedWarnings.cpp      |  15 +-
+ ...ffer-usage-in-container-span-construct.cpp | 136 ++++++++++++++++++
+ ...e-buffer-usage-warning-data-invocation.cpp |   2 +-
+ 7 files changed, 214 insertions(+), 4 deletions(-)
+ create mode 100644 clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
+
+diff --git a/clang/include/clang/Analysis/Analyses/UnsafeBufferUsage.h b/clang/include/clang/Analysis/Analyses/UnsafeBufferUsage.h
+index b28f2c6b99c50e..aca1ad998822c5 100644
+--- a/clang/include/clang/Analysis/Analyses/UnsafeBufferUsage.h
++++ b/clang/include/clang/Analysis/Analyses/UnsafeBufferUsage.h
+@@ -16,6 +16,7 @@
+ 
+ #include "clang/AST/Decl.h"
+ #include "clang/AST/Stmt.h"
++#include "clang/Basic/SourceLocation.h"
+ #include "llvm/Support/Debug.h"
+ 
+ namespace clang {
+@@ -98,9 +99,14 @@ class UnsafeBufferUsageHandler {
+ #endif
+ 
+ public:
+-  /// Returns a reference to the `Preprocessor`:
++  /// \return true iff buffer safety is opt-out at `Loc`; false otherwise.
+   virtual bool isSafeBufferOptOut(const SourceLocation &Loc) const = 0;
+ 
++  /// \return true iff unsafe uses in containers should NOT be reported at
++  /// `Loc`; false otherwise.
++  virtual bool
++  ignoreUnsafeBufferInContainer(const SourceLocation &Loc) const = 0;
++
+   virtual std::string
+   getUnsafeBufferUsageAttributeTextAt(SourceLocation Loc,
+                                       StringRef WSSuffix = "") const = 0;
+diff --git a/clang/include/clang/Analysis/Analyses/UnsafeBufferUsageGadgets.def b/clang/include/clang/Analysis/Analyses/UnsafeBufferUsageGadgets.def
+index c9766168836510..07f805ebb11013 100644
+--- a/clang/include/clang/Analysis/Analyses/UnsafeBufferUsageGadgets.def
++++ b/clang/include/clang/Analysis/Analyses/UnsafeBufferUsageGadgets.def
+@@ -18,6 +18,12 @@
+ #define WARNING_GADGET(name) GADGET(name)
+ #endif
+ 
++/// A `WARNING_GADGET` subset, where the code pattern of each gadget
++/// corresponds uses of a (possibly hardened) contatiner (e.g., `std::span`).
++#ifndef WARNING_CONTAINER_GADGET
++#define WARNING_CONTAINER_GADGET(name) WARNING_GADGET(name)
++#endif
++
+ /// Safe gadgets correspond to code patterns that aren't unsafe but need to be
+ /// properly recognized in order to emit correct warnings and fixes over unsafe
+ /// gadgets.
+@@ -31,6 +37,7 @@ WARNING_GADGET(ArraySubscript)
+ WARNING_GADGET(PointerArithmetic)
+ WARNING_GADGET(UnsafeBufferUsageAttr)
+ WARNING_GADGET(DataInvocation)
++WARNING_CONTAINER_GADGET(SpanTwoParamConstructor) // Uses of `std::span(arg0, arg1)`
+ FIXABLE_GADGET(ULCArraySubscript)          // `DRE[any]` in an Unspecified Lvalue Context
+ FIXABLE_GADGET(DerefSimplePtrArithFixable)
+ FIXABLE_GADGET(PointerDereference)
+@@ -43,4 +50,5 @@ FIXABLE_GADGET(PointerInit)
+ 
+ #undef FIXABLE_GADGET
+ #undef WARNING_GADGET
++#undef WARNING_CONTAINER_GADGET
+ #undef GADGET
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index e54f969c19039d..438c2fcdb1c77b 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -12075,6 +12075,9 @@ def note_unsafe_buffer_variable_fixit_together : Note<
+   "%select{|, and change %2 to safe types to make function %4 bounds-safe}3">;
+ def note_safe_buffer_usage_suggestions_disabled : Note<
+   "pass -fsafe-buffer-usage-suggestions to receive code hardening suggestions">;
++def warn_unsafe_buffer_usage_in_container : Warning<
++  "the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information">,
++  InGroup<UnsafeBufferUsageInContainer>, DefaultIgnore;
+ #ifndef NDEBUG
+ // Not a user-facing diagnostic. Useful for debugging false negatives in
+ // -fsafe-buffer-usage-suggestions (i.e. lack of -Wunsafe-buffer-usage fixits).
+diff --git a/clang/lib/Analysis/UnsafeBufferUsage.cpp b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+index 724c4304a07242..3b6d69cac1afd8 100644
+--- a/clang/lib/Analysis/UnsafeBufferUsage.cpp
++++ b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+@@ -232,6 +232,11 @@ AST_MATCHER_P(Stmt, notInSafeBufferOptOut, const UnsafeBufferUsageHandler *,
+   return !Handler->isSafeBufferOptOut(Node.getBeginLoc());
+ }
+ 
++AST_MATCHER_P(Stmt, ignoreUnsafeBufferInContainer,
++              const UnsafeBufferUsageHandler *, Handler) {
++  return Handler->ignoreUnsafeBufferInContainer(Node.getBeginLoc());
++}
++
+ AST_MATCHER_P(CastExpr, castSubExpr, internal::Matcher<Expr>, innerMatcher) {
+   return innerMatcher.matches(*Node.getSubExpr(), Finder, Builder);
+ }
+@@ -594,6 +599,43 @@ class PointerArithmeticGadget : public WarningGadget {
+   // FIXME: this gadge will need a fix-it
+ };
+ 
++class SpanTwoParamConstructorGadget : public WarningGadget {
++  static constexpr const char *const SpanTwoParamConstructorTag =
++      "spanTwoParamConstructor";
++  const CXXConstructExpr *Ctor; // the span constructor expression
++
++public:
++  SpanTwoParamConstructorGadget(const MatchFinder::MatchResult &Result)
++      : WarningGadget(Kind::SpanTwoParamConstructor),
++        Ctor(Result.Nodes.getNodeAs<CXXConstructExpr>(
++            SpanTwoParamConstructorTag)) {}
++
++  static bool classof(const Gadget *G) {
++    return G->getKind() == Kind::SpanTwoParamConstructor;
++  }
++
++  static Matcher matcher() {
++    auto HasTwoParamSpanCtorDecl = hasDeclaration(
++        cxxConstructorDecl(hasDeclContext(isInStdNamespace()), hasName("span"),
++                           parameterCountIs(2)));
++
++    return stmt(cxxConstructExpr(HasTwoParamSpanCtorDecl)
++                    .bind(SpanTwoParamConstructorTag));
++  }
++
++  const Stmt *getBaseStmt() const override { return Ctor; }
++
++  DeclUseList getClaimedVarUseSites() const override {
++    // If the constructor call is of the form `std::span{var, n}`, `var` is
++    // considered an unsafe variable.
++    if (auto *DRE = dyn_cast<DeclRefExpr>(Ctor->getArg(0))) {
++      if (isa<VarDecl>(DRE->getDecl()))
++        return {DRE};
++    }
++    return {};
++  }
++};
++
+ /// A pointer initialization expression of the form:
+ ///  \code
+ ///  int *p = q;
+@@ -1209,6 +1251,10 @@ findGadgets(const Decl *D, const UnsafeBufferUsageHandler &Handler,
+ #define WARNING_GADGET(x)                                                      \
+           allOf(x ## Gadget::matcher().bind(#x),                               \
+                 notInSafeBufferOptOut(&Handler)),
++#define WARNING_CONTAINER_GADGET(x)                                            \
++          allOf(x ## Gadget::matcher().bind(#x),                               \
++                notInSafeBufferOptOut(&Handler),                               \
++                unless(ignoreUnsafeBufferInContainer(&Handler))),
+ #include "clang/Analysis/Analyses/UnsafeBufferUsageGadgets.def"
+             // Avoid a hanging comma.
+             unless(stmt())
+diff --git a/clang/lib/Sema/AnalysisBasedWarnings.cpp b/clang/lib/Sema/AnalysisBasedWarnings.cpp
+index 9eb1df5f024059..1f9c8be81ea17e 100644
+--- a/clang/lib/Sema/AnalysisBasedWarnings.cpp
++++ b/clang/lib/Sema/AnalysisBasedWarnings.cpp
+@@ -26,7 +26,6 @@
+ #include "clang/AST/StmtCXX.h"
+ #include "clang/AST/StmtObjC.h"
+ #include "clang/AST/StmtVisitor.h"
+-#include "clang/AST/RecursiveASTVisitor.h"
+ #include "clang/AST/Type.h"
+ #include "clang/Analysis/Analyses/CFGReachabilityAnalysis.h"
+ #include "clang/Analysis/Analyses/CalledOnceCheck.h"
+@@ -39,6 +38,7 @@
+ #include "clang/Analysis/CFG.h"
+ #include "clang/Analysis/CFGStmtMap.h"
+ #include "clang/Basic/Diagnostic.h"
++#include "clang/Basic/DiagnosticSema.h"
+ #include "clang/Basic/SourceLocation.h"
+ #include "clang/Basic/SourceManager.h"
+ #include "clang/Lex/Preprocessor.h"
+@@ -2256,6 +2256,9 @@ class UnsafeBufferUsageReporter : public UnsafeBufferUsageHandler {
+         Range = UO->getSubExpr()->getSourceRange();
+         MsgParam = 1;
+       }
++    } else if (const auto *CtorExpr = dyn_cast<CXXConstructExpr>(Operation)) {
++      S.Diag(CtorExpr->getLocation(),
++             diag::warn_unsafe_buffer_usage_in_container);
+     } else {
+       if (isa<CallExpr>(Operation)) {
+         // note_unsafe_buffer_operation doesn't have this mode yet.
+@@ -2331,6 +2334,10 @@ class UnsafeBufferUsageReporter : public UnsafeBufferUsageHandler {
+     return S.PP.isSafeBufferOptOut(S.getSourceManager(), Loc);
+   }
+ 
++  bool ignoreUnsafeBufferInContainer(const SourceLocation &Loc) const override {
++    return S.Diags.isIgnored(diag::warn_unsafe_buffer_usage_in_container, Loc);
++  }
++
+   // Returns the text representation of clang::unsafe_buffer_usage attribute.
+   // `WSSuffix` holds customized "white-space"s, e.g., newline or whilespace
+   // characters.
+@@ -2495,6 +2502,8 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
+     if (!Diags.isIgnored(diag::warn_unsafe_buffer_operation,
+                          Node->getBeginLoc()) ||
+         !Diags.isIgnored(diag::warn_unsafe_buffer_variable,
++                         Node->getBeginLoc()) ||
++        !Diags.isIgnored(diag::warn_unsafe_buffer_usage_in_container,
+                          Node->getBeginLoc())) {
+       clang::checkUnsafeBufferUsage(Node, R,
+                                     UnsafeBufferUsageShouldEmitSuggestions);
+@@ -2505,7 +2514,9 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
+   // Emit per-function analysis-based warnings that require the whole-TU
+   // reasoning. Check if any of them is enabled at all before scanning the AST:
+   if (!Diags.isIgnored(diag::warn_unsafe_buffer_operation, SourceLocation()) ||
+-      !Diags.isIgnored(diag::warn_unsafe_buffer_variable, SourceLocation())) {
++      !Diags.isIgnored(diag::warn_unsafe_buffer_variable, SourceLocation()) ||
++      !Diags.isIgnored(diag::warn_unsafe_buffer_usage_in_container,
++                       SourceLocation())) {
+     CallableVisitor(CallAnalyzers).TraverseTranslationUnitDecl(TU);
+   }
+ }
+diff --git a/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp b/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
+new file mode 100644
+index 00000000000000..619c60a59acbdf
+--- /dev/null
++++ b/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
+@@ -0,0 +1,136 @@
++// RUN: %clang_cc1 -std=c++20  -Wno-all  -Wunsafe-buffer-usage-in-container -verify %s
++
++namespace std {
++  template <class T> class span {
++  public:
++    constexpr span(T *, unsigned){}
++
++    template<class Begin, class End>
++    constexpr span(Begin first, End last){}
++
++    T * data();
++
++    constexpr span() {};
++
++    constexpr span(const std::span<T> &span) {};
++
++    template<class R>
++    constexpr span(R && range){};
++  };
++
++
++  template< class T >
++  T&& move( T&& t ) noexcept;
++}
++
++namespace irrelevant_constructors {
++  void non_two_param_constructors() {
++    class Array {
++    } a;
++    std::span<int> S;      // no warn
++    std::span<int> S1{};   // no warn
++    std::span<int> S2{std::move(a)};  // no warn
++    std::span<int> S3{S2};  // no warn
++  }
++} // irrelevant_constructors
++
++namespace construct_wt_ptr_size {
++  std::span<int> warnVarInit(int *p) {
++    std::span<int> S{p, 10};                     // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S1(p, 10);                    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S2 = std::span{p, 10};        // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S3 = std::span(p, 10);        // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S4 = std::span<int>{p, 10};   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S5 = std::span<int>(p, 10);   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S6 = {p, 10};                 // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto S7 = std::span<int>{p, 10};             // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto S8 = std::span<int>(p, 10);             // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    const auto &S9 = std::span<int>{p, 10};      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto &&S10 = std::span<int>(p, 10);          // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++#define Ten 10
++
++    std::span S11 = std::span<int>{p, Ten};      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    if (auto X = std::span<int>{p, Ten}; S10.data()) { // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    }
++
++    auto X = warnVarInit(p); // function return is fine
++    return S;
++  }
++
++  template<typename T>
++  void foo(const T &, const T &&, T);
++
++  std::span<int> warnTemp(int *p) {
++    foo(std::span<int>{p, 10},                       // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++	std::move(std::span<int>{p, 10}),            // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++	std::span<int>{p, 10});                      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    std::span<int> Arr[1] = {std::span<int>{p, 10}}; // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    if (std::span<int>{p, 10}.data()) {              // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    }
++    return std::span<int>{p, 10};                    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++  }
++} // namespace construct_wt_ptr_size
++
++namespace construct_wt_begin_end {
++  class It {};
++
++  std::span<int> warnVarInit(It &First, It &Last) {
++    std::span<int> S{First, Last};                     // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S1(First, Last);                    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S2 = std::span<int>{First, Last};   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S3 = std::span<int>(First, Last);   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S4 = std::span<int>{First, Last};   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S5 = std::span<int>(First, Last);   // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    std::span<int> S6 = {First, Last};                 // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto S7 = std::span<int>{First, Last};             // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto S8 = std::span<int>(First, Last);             // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    const auto &S9 = std::span<int>{First, Last};      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    auto &&S10 = std::span<int>(First, Last);          // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    if (auto X = std::span<int>{First, Last}; S10.data()) { // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    }
++
++    auto X = warnVarInit(First, Last); // function return is fine
++    return S;
++  }
++
++  template<typename T>
++  void foo(const T &, const T &&, T);
++
++  std::span<int> warnTemp(It &First, It &Last) {
++    foo(std::span<int>{First, Last},                       // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++	std::move(std::span<int>{First, Last}),            // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++	std::span<int>{First, Last});                      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    std::span<int> Arr[1] = {std::span<int>{First, Last}}; // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++
++    if (std::span<int>{First, Last}.data()) {              // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    }
++    return std::span<int>{First, Last};                    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++  }
++} // namespace construct_wt_begin_end
++
++namespace test_flag {
++  void f(int *p) {
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"  // this flag turns off every unsafe-buffer warning
++    std::span<int> S{p, 10};   // no-warning
++    p++;                       // no-warning
++#pragma clang diagnostic pop
++
++#pragma clang diagnostic push
++#pragma clang diagnostic warning "-Wunsafe-buffer-usage"
++#pragma clang diagnostic ignored "-Wunsafe-buffer-usage-in-container"
++    // turn on all unsafe-buffer warnings except for the ones under `-Wunsafe-buffer-usage-in-container`
++    std::span<int> S2{p, 10};   // no-warning
++
++    p++; // expected-warning{{unsafe pointer arithmetic}}\
++	    expected-note{{pass -fsafe-buffer-usage-suggestions to receive code hardening suggestions}}
++#pragma clang diagnostic pop
++
++  }
++} //namespace test_flag
+diff --git a/clang/test/SemaCXX/warn-unsafe-buffer-usage-warning-data-invocation.cpp b/clang/test/SemaCXX/warn-unsafe-buffer-usage-warning-data-invocation.cpp
+index 79eb3bb4bacc6e..eb9005ff6ab6a4 100644
+--- a/clang/test/SemaCXX/warn-unsafe-buffer-usage-warning-data-invocation.cpp
++++ b/clang/test/SemaCXX/warn-unsafe-buffer-usage-warning-data-invocation.cpp
+@@ -1,4 +1,4 @@
+-// RUN: %clang_cc1 -std=c++20  -Wno-all -Wunsafe-buffer-usage \
++// RUN: %clang_cc1 -std=c++20  -Wno-all -Wunsafe-buffer-usage -Wno-unsafe-buffer-usage-in-container\
+ // RUN:            -fsafe-buffer-usage-suggestions \
+ // RUN:            -fblocks -include %s -verify %s
+ 
+
+From e01385318baa34b07da8b5219845a5df93781fd6 Mon Sep 17 00:00:00 2001
+From: Ziqing Luo <ziqing@udel.edu>
+Date: Mon, 22 Jan 2024 17:12:15 -0800
+Subject: [PATCH 2/3] [-Wunsafe-buffer-usage] Teach
+ -Wunsafe-buffer-usage-in-container to be quiet on some benign cases
+
+For some cases where the analyzer can tell it's safe to use
+two-parameter std::span constructors, the analyzer will not report
+false alarms on them.  For example,
+```
+std::span<T>{&var, 1} or std::span<T>{new T, 1}
+```
+rdar://115817781
+---
+ clang/lib/Analysis/UnsafeBufferUsage.cpp      | 71 ++++++++++++++++++-
+ ...ffer-usage-in-container-span-construct.cpp | 20 ++++++
+ 2 files changed, 90 insertions(+), 1 deletion(-)
+
+diff --git a/clang/lib/Analysis/UnsafeBufferUsage.cpp b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+index 3b6d69cac1afd8..524da741f68b19 100644
+--- a/clang/lib/Analysis/UnsafeBufferUsage.cpp
++++ b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+@@ -14,6 +14,7 @@
+ #include "clang/ASTMatchers/ASTMatchFinder.h"
+ #include "clang/Lex/Lexer.h"
+ #include "clang/Lex/Preprocessor.h"
++#include "llvm/ADT/APSInt.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include <memory>
+ #include <optional>
+@@ -330,6 +331,73 @@ isInUnspecifiedUntypedContext(internal::Matcher<Stmt> InnerMatcher) {
+   // FIXME: Handle loop bodies.
+   return stmt(anyOf(CompStmt, IfStmtThen, IfStmtElse));
+ }
++
++// Given a two-param std::span construct call, matches iff the call has the
++// following forms:
++//   1. `std::span<T>{new T[n], n}`, where `n` is a literal or a DRE
++//   2. `std::span<T>{new T, 1}`
++//   3. `std::span<T>{&var, 1}`
++//   4. `std::span<T>{a, n}`, where `a` is of an array-of-T with constant size
++//   `n`
++//   5. `std::span<T>{any, 0}`
++AST_MATCHER(CXXConstructExpr, isSafeSpanTwoParamConstruct) {
++  assert(Node.getNumArgs() == 2 &&
++         "expecting a two-parameter std::span constructor");
++  const Expr *Arg0 = Node.getArg(0)->IgnoreImplicit();
++  const Expr *Arg1 = Node.getArg(1)->IgnoreImplicit();
++  auto HaveEqualConstantValues = [&Finder](const Expr *E0, const Expr *E1) {
++    if (auto E0CV = E0->getIntegerConstantExpr(Finder->getASTContext()))
++      if (auto E1CV = E1->getIntegerConstantExpr(Finder->getASTContext())) {
++        return APSInt::compareValues(*E0CV, *E1CV) == 0;
++      }
++    return false;
++  };
++  auto AreSameDRE = [](const Expr *E0, const Expr *E1) {
++    if (auto *DRE0 = dyn_cast<DeclRefExpr>(E0))
++      if (auto *DRE1 = dyn_cast<DeclRefExpr>(E1)) {
++        return DRE0->getDecl() == DRE1->getDecl();
++      }
++    return false;
++  };
++  std::optional<APSInt> Arg1CV =
++      Arg1->getIntegerConstantExpr(Finder->getASTContext());
++
++  if (Arg1CV && Arg1CV->isZero())
++    // Check form 5:
++    return true;
++  switch (Arg0->IgnoreImplicit()->getStmtClass()) {
++  case Stmt::CXXNewExprClass:
++    if (auto Size = cast<CXXNewExpr>(Arg0)->getArraySize()) {
++      // Check form 1:
++      return AreSameDRE((*Size)->IgnoreImplicit(), Arg1) ||
++             HaveEqualConstantValues(*Size, Arg1);
++    }
++    // TODO: what's placeholder type? avoid it for now.
++    if (!cast<CXXNewExpr>(Arg0)->hasPlaceholderType()) {
++      // Check form 2:
++      return Arg1CV && Arg1CV->isOne();
++    }
++    break;
++  case Stmt::UnaryOperatorClass:
++    if (cast<UnaryOperator>(Arg0)->getOpcode() ==
++        UnaryOperator::Opcode::UO_AddrOf)
++      // Check form 3:
++      return Arg1CV && Arg1CV->isOne();
++    break;
++  default:
++    break;
++  }
++
++  QualType Arg0Ty = Arg0->IgnoreImplicit()->getType();
++
++  if (Arg0Ty->isConstantArrayType()) {
++    const APInt &ConstArrSize = cast<ConstantArrayType>(Arg0Ty)->getSize();
++
++    // Check form 4:
++    return Arg1CV && APSInt::compareValues(APSInt(ConstArrSize), *Arg1CV) == 0;
++  }
++  return false;
++}
+ } // namespace clang::ast_matchers
+ 
+ namespace {
+@@ -619,7 +687,8 @@ class SpanTwoParamConstructorGadget : public WarningGadget {
+         cxxConstructorDecl(hasDeclContext(isInStdNamespace()), hasName("span"),
+                            parameterCountIs(2)));
+ 
+-    return stmt(cxxConstructExpr(HasTwoParamSpanCtorDecl)
++    return stmt(cxxConstructExpr(HasTwoParamSpanCtorDecl,
++                                 unless(isSafeSpanTwoParamConstruct()))
+                     .bind(SpanTwoParamConstructorTag));
+   }
+ 
+diff --git a/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp b/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
+index 619c60a59acbdf..a1ddc384e0d9b8 100644
+--- a/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
++++ b/clang/test/SemaCXX/warn-unsafe-buffer-usage-in-container-span-construct.cpp
+@@ -73,6 +73,26 @@ namespace construct_wt_ptr_size {
+     }
+     return std::span<int>{p, 10};                    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
+   }
++
++  void notWarnSafeCases(unsigned n, int *p) {
++    int X;
++    unsigned Y = 10;
++    std::span<int> S = std::span{&X, 1}; // no-warning
++    int Arr[10];
++
++    S = std::span{&X, 2};                // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    S = std::span{new int[10], 10};      // no-warning
++    S = std::span{new int[n], n};        // no-warning
++    S = std::span{new int, 1};           // no-warning
++    S = std::span{new int, X};           // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    S = std::span{new int[n--], n--};    // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    S = std::span{new int[10], 11};      // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}
++    S = std::span{new int[10], 9};       // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}  // not smart enough to tell its safe
++    S = std::span{new int[10], Y};       // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}  // not smart enough to tell its safe
++    S = std::span{Arr, 10};              // no-warning
++    S = std::span{Arr, Y};               // expected-warning{{the two-parameter std::span construction is unsafe as it can introduce mismatch between buffer size and the bound information}}  // not smart enough to tell its safe
++    S = std::span{p, 0};                 // no-warning
++  }
+ } // namespace construct_wt_ptr_size
+ 
+ namespace construct_wt_begin_end {
+
+From e34475cee8c980d0b3d093418985e77647349467 Mon Sep 17 00:00:00 2001
+From: Ziqing Luo <ziqing@udel.edu>
+Date: Tue, 23 Jan 2024 17:20:19 -0800
+Subject: [PATCH 3/3] [-Wunsafe-buffer-usage][NFC] fix clang format
+
+---
+ clang/lib/Analysis/UnsafeBufferUsage.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/clang/lib/Analysis/UnsafeBufferUsage.cpp b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+index 524da741f68b19..ed9bdd013172f1 100644
+--- a/clang/lib/Analysis/UnsafeBufferUsage.cpp
++++ b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+@@ -18,8 +18,8 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include <memory>
+ #include <optional>
+-#include <sstream>
+ #include <queue>
++#include <sstream>
+ 
+ using namespace llvm;
+ using namespace clang;
