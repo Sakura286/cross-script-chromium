@@ -360,3 +360,4 @@ index 00000000000..2f13cf17169
 +    check_target("riscv32imac-unknown-none-elf", "riscv32-unknown-elf", "rv32imac", false);
 +    check_target("riscv32gc-unknown-linux-gnu", "riscv32-linux-gnu", "rv32gc", true);
 +}
+
