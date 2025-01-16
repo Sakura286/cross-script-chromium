@@ -80,7 +80,9 @@ RUN mkdir -p third_party/llvm-build-tools && \
 
 # Build LLVM, then rust
 WORKDIR $CHROMIUM_DIR
-RUN tools/rust/package_rust.py
+RUN tools/clang/scripts/package.py
+RUN ln -s ../../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
+    tools/rust/package_rust.py
 
 # Build GN
 WORKDIR $WORKSPACE
