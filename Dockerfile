@@ -48,7 +48,7 @@ RUN git clone --depth=1 https://github.com/rockos-riscv/chromium-129.0.6668.100 
     cd $CHROMIUM_DIR && \
     git remote add sakura286 https://github.com/Sakura286/chromium-rokcos.git && \
     git fetch sakura286 && \
-    git switch -c crosss-build sakura286/master
+    git switch -c cross-build sakura286/master
 RUN $CHROMIUM_DIR/build/install-build-deps.sh
 
 # Prepare Sysroot
