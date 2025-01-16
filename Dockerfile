@@ -46,12 +46,11 @@ RUN echo 'export PATH=$HOME/depot_tools:$PATH' >> ~/.bashrc
 # Get Source Code
 # TODO: Use rockos source repo and patch the patches seperately
 RUN git clone --progress --depth=1 https://github.com/Sakura286/chromium-rokcos.git $CHROMIUM_DIR
-RUN $CHROMIUM_DIR/build/install-build-deps.sh 
+RUN $CHROMIUM_DIR/build/install-build-deps.sh
 
 # Prepare Sysroot
 ## (1) Patch multistrap
-WORKDIR $WORKSPACE 
-RUN patch -p0 /usr/sbin/multistrap multistrap-auth.patch 
+RUN patch -p0 /usr/sbin/multistrap $SCRIPT_DIR/multistrap-auth.patch
 WORKDIR $CHROMIUM_DIR 
 ## (2) Get riscv64 sysroot
 ### You can also run
