@@ -41,6 +41,7 @@ RUN git clone --depth=1 https://github.com/Sakura286/cross-chromium-dl $SCRIPT_D
 # Get depot_tools
 RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 RUN echo 'export PATH='$WORKSPACE'/depot_tools:$PATH' >> ~/.bashrc 
+ENV PATH="$WORKSPACE/depot_tools:$PATH"
 
 # Get Source Code
 # TODO: Use rockos source repo and patch the patches seperately
@@ -80,7 +81,9 @@ RUN mkdir -p third_party/llvm-build-tools && \
 # Build LLVM, then rust
 WORKDIR $CHROMIUM_DIR
 RUN tools/clang/scripts/package.py
-RUN ln -s ../../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
+RUN mkdir -p $CHROMIUM_DIR/third_party/rust-toolchain-intermediate && \
+    ln -s ../../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
+    echo "Start rust toolchain building" && \
     tools/rust/package_rust.py
 
 # Build GN
@@ -90,6 +93,7 @@ RUN git clone https://gn.googlesource.com/gn && \
     CXX=$LLVM_DIR/clang++ AR=$LLVM_DIR/llvm-ar python3 build/gen.py && \
     ninja -C out
 RUN echo 'export PATH='$WORKSPACE'/gn/out:$PATH' >> ~/.bashrc
+ENV PATH="$WORKSPACE/gn/out:$WORKSPACE/depot_tools:$PATH"
 
 # Configure node support
 WORKDIR $CHROMIUM_DIR
