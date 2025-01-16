@@ -6,7 +6,6 @@ ARG WORKSPACE=/workspace
 ARG CHROMIUM_DIR=$WORKSPACE/chromium-rokcos-master 
 ARG LLVM_DIR=$CHROMIUM_DIR/third_party/llvm-build/Release+Asserts/bin 
 ARG SCRIPT_DIR=$WORKSPACE/eswin-scripts
-ENV export WORKSPACE=$WORKSPACE
 
 ARG USER_EMAIL=chenxuan@iscas.ac.cn 
 ARG USER_NAME='CHEN Xuan' 
@@ -41,7 +40,7 @@ RUN git clone --depth=1 https://github.com/Sakura286/cross-chromium-dl $SCRIPT_D
 
 # Get depot_tools
 RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-RUN echo 'export PATH=$WORKSPACE/depot_tools:$PATH' >> ~/.bashrc 
+RUN echo 'export PATH='$WORKSPACE'/depot_tools:$PATH' >> ~/.bashrc 
 
 # Get Source Code
 # TODO: Use rockos source repo and patch the patches seperately
@@ -90,7 +89,7 @@ RUN git clone https://gn.googlesource.com/gn && \
     cd gn && \
     CXX=$LLVM_DIR/clang++ AR=$LLVM_DIR/llvm-ar python3 build/gen.py && \
     ninja -C out
-RUN echo 'export PATH=$WORKSPACE/gn/out:$PATH' >> ~/.bashrc
+RUN echo 'export PATH='$WORKSPACE'/gn/out:$PATH' >> ~/.bashrc
 
 # Configure node support
 WORKDIR $CHROMIUM_DIR
