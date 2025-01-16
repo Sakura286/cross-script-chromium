@@ -37,15 +37,18 @@ RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
 
 # Get patches and sysroot conf
 RUN git clone --depth=1 https://github.com/Sakura286/cross-chromium-dl $SCRIPT_DIR
-RUN curl -o multistrap-auth.patch "https://bugs.debian.org/cgi-bin/bugreport.cgi?att=1;bug=908451;filename=multistrap.patch;msg=17"
 
 # Get depot_tools
-RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git 
+RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 RUN echo 'export PATH=$HOME/depot_tools:$PATH' >> ~/.bashrc 
 
 # Get Source Code
 # TODO: Use rockos source repo and patch the patches seperately
-RUN git clone --progress --depth=1 https://github.com/Sakura286/chromium-rokcos.git $CHROMIUM_DIR
+RUN git clone --depth=1 https://github.com/rockos-riscv/chromium-129.0.6668.100 $CHROMIUM_DIR && \
+    cd $CHROMIUM_DIR && \
+    git remote add sakura286 https://github.com/Sakura286/chromium-rokcos.git && \
+    git fetch sakura286 && \
+    git switch -c crosss-build sakura286/master
 RUN $CHROMIUM_DIR/build/install-build-deps.sh
 
 # Prepare Sysroot
@@ -74,7 +77,7 @@ RUN mkdir -p third_party/llvm-build-tools && \
     ln -s ../../build/linux/debian_sid_riscv64-sysroot third_party/llvm-build-tools/debian_sid_riscv64_sysroot && \
     ln -s ../../build/linux/debian_bookworm_amd64-sysroot third_party/llvm-build-tools/debian_bookworm_amd64-sysroot
 
-# Build Rust and LLVM
+# Build LLVM, then rust
 WORKDIR $CHROMIUM_DIR
 RUN tools/rust/package_rust.py
 
