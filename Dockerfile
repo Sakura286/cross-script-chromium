@@ -110,5 +110,6 @@ RUN $SCRIPT_DIR/build.sh
 RUN apt install -y libjpeg62 && cp third_party/llvm-build-tools/debian_bullseye_amd64_sysroot/usr/lib/x86_64-linux-gnu/libdav1d.so.6 /usr/lib/x86_64-linux-gnu/
 
 # Source: Build chromium
-CMD echo shit
+## Build: ninja -j12 -C out/Release-riscv64 chrome  |& tee xxxx.log
+## Package: /workspace/package.sh
 
