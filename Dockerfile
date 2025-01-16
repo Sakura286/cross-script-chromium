@@ -82,7 +82,7 @@ RUN mkdir -p third_party/llvm-build-tools && \
 WORKDIR $CHROMIUM_DIR
 RUN tools/clang/scripts/package.py
 RUN mkdir -p $CHROMIUM_DIR/third_party/rust-toolchain-intermediate && \
-    ln -s ../../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
+    ln -s ../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
     echo "Start rust toolchain building" && \
     tools/rust/package_rust.py
 
