@@ -33,7 +33,8 @@ RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
         libcurl4-openssl-dev libzstd-dev fonts-ipafont-gothic fonts-ipafont-mincho && \
     git config --global user.email $USER_EMAIL && \
     git config --global user.name $USER_NAME && \
-    git config --global http.version HTTP/1.1
+    git config --global http.version HTTP/1.1 && \
+    git config --global remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 
 # Get patches and sysroot conf
 RUN git clone --depth=1 https://github.com/Sakura286/cross-chromium-dl $SCRIPT_DIR
@@ -81,10 +82,7 @@ RUN mkdir -p third_party/llvm-build-tools && \
 # Build LLVM, then rust
 WORKDIR $CHROMIUM_DIR
 RUN tools/clang/scripts/package.py
-RUN mkdir -p $CHROMIUM_DIR/third_party/rust-toolchain-intermediate && \
-    ln -s ../llvm-build/Release+Asserts $CHROMIUM_DIR/third_party/rust-toolchain-intermediate/llvm-host-install && \
-    echo "Start rust toolchain building" && \
-    tools/rust/package_rust.py
+RUN tools/rust/package_rust.py
 
 # Build GN
 WORKDIR $WORKSPACE
