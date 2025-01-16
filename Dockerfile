@@ -111,5 +111,5 @@ RUN apt install -y libjpeg62 && cp third_party/llvm-build-tools/debian_bullseye_
 
 # Source: Build chromium
 ## Build: ninja -j12 -C out/Release-riscv64 chrome  |& tee xxxx.log
-## Package: /workspace/package.sh
+## Package: /workspace/eswin-scripts/package.sh
 
