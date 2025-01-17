@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -x
 gn gen out/Release-riscv64 --args='
 is_official_build=true
 is_debug=false
