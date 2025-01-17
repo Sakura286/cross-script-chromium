@@ -103,11 +103,6 @@ RUN mkdir -p third_party/node/linux/node-linux-x64/bin && \
 RUN debian/scripts/unbundle
 
 # Configure chromium
-RUN $SCRIPT_DIR/build.sh
-
-# Some other hack
-## v8_snapshot_generator use some lib that only exist in amd64 sysroot
-RUN apt install -y libjpeg62 && cp third_party/llvm-build-tools/debian_bullseye_amd64_sysroot/usr/lib/x86_64-linux-gnu/libdav1d.so.6 /usr/lib/x86_64-linux-gnu/
 
 # Source: Build chromium
 ## Build: ninja -j12 -C out/Release-riscv64 chrome  |& tee xxxx.log
