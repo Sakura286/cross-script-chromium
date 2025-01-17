@@ -103,8 +103,10 @@ RUN mkdir -p third_party/node/linux/node-linux-x64/bin && \
 RUN debian/scripts/unbundle
 
 # Configure chromium
+RUN $SCRIPT_DIR/configure.sh
 
 # Source: Build chromium
-## Build: ninja -j12 -C out/Release-riscv64 chrome  |& tee xxxx.log
+## Build: /workspace/eswin-scripts/build.sh
 ## Package: /workspace/eswin-scripts/package.sh
+## The packaged file will be chromium-dist.zst
 
