@@ -36,7 +36,7 @@ RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
     git config --global http.version HTTP/1.1
 
 # Get patches and sysroot conf
-RUN git clone --depth=1 https://github.com/Sakura286/cross-chromium-dl $SCRIPT_DIR
+RUN git clone --depth=1 https://github.com/rockos-riscv/cross-script-chromium $SCRIPT_DIR
 
 # Get depot_tools
 RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
