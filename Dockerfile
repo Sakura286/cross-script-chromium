@@ -54,8 +54,10 @@ RUN echo 'export PATH='$WORKSPACE'/depot_tools:$PATH' >> ~/.bashrc
 ENV PATH="$WORKSPACE/depot_tools:$PATH"
 
 # Get Source Code
-RUN dget -u https://fast-mirror.isrc.ac.cn/rockos/dev/rockos-gles/pool/main/c/chromium/chromium_129.0.6668.100-1rockos3%2Bgles2.dsc
-RUN cd chromium-129.0.6668.100 && git init && git add . && git commit -m "init"
+RUN dget -u https://fast-mirror.isrc.ac.cn/rockos/dev/rockos-gles/pool/main/c/chromium/chromium_129.0.6668.100-1rockos3%2Bgles2.dsc && \
+    mv chromium-129.0.6668.100 $CHROMIUM_DIR
+WORKDIR $CHROMIUM_DIR
+RUN git init && git add . && git commit -m "init"
 RUN git remote add sakura286 https://github.com/Sakura286/chromium-rokcos.git && \
     git fetch sakura286 && \
     git cherry-pick 0b9337ce8e..f0b7a21ec2 || git add . && git -c core.editor=true cherry-pick --continue
@@ -64,7 +66,6 @@ RUN $CHROMIUM_DIR/build/install-build-deps.sh
 # Prepare Sysroot
 ## (1) Patch multistrap
 RUN patch -p0 /usr/sbin/multistrap $SCRIPT_DIR/multistrap-auth.patch
-WORKDIR $CHROMIUM_DIR
 ## (2) Get riscv64 sysroot
 RUN multistrap -a riscv64 -d build/linux/debian_sid_riscv64-sysroot -f $SCRIPT_DIR/sysroot-riscv64.conf
 RUN cd build/linux/debian_sid_riscv64-sysroot && \
