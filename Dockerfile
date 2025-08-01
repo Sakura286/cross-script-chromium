@@ -1,20 +1,25 @@
-FROM ubuntu:noble 
+# There are still several weired hacks to be fixed
+# 1. Why use amd64 sysroot? It is not necessary obviously.
+# 2. Why use amd64 libjpeg62 and libdav1d?
+# 3.
 
-MAINTAINER CHEN Xuan 
+FROM ubuntu:noble
 
-ARG WORKSPACE=/workspace 
-ARG CHROMIUM_DIR=$WORKSPACE/chromium-rokcos-master 
-ARG LLVM_DIR=$CHROMIUM_DIR/third_party/llvm-build/Release+Asserts/bin 
+LABEL org.opencontainers.image.authors="chenxuan@iscas.ac.cn"
+
+ARG WORKSPACE=/workspace
+ARG CHROMIUM_DIR=$WORKSPACE/chromium-rokcos-master
+ARG LLVM_DIR=$CHROMIUM_DIR/third_party/llvm-build/Release+Asserts/bin
 ARG SCRIPT_DIR=$WORKSPACE/eswin-scripts
 
-ARG USER_EMAIL=chenxuan@iscas.ac.cn 
-ARG USER_NAME='CHEN Xuan' 
+ARG USER_EMAIL=chenxuan@iscas.ac.cn
+ARG USER_NAME='CHEN Xuan'
 
-USER root 
+USER root
 
 # Prepare Environment
 RUN mkdir $WORKSPACE
-WORKDIR $WORKSPACE 
+WORKDIR $WORKSPACE
 RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
     --mount=target=/var/cache/apt,type=cache,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -30,45 +35,44 @@ RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
         libpulse-dev libpam0g-dev libtiff-dev libdouble-conversion-dev libxnvctrl-dev libglib2.0-dev libasound2-dev        \
         libsecret-1-dev libspeechd-dev libminizip-dev libhunspell-dev libharfbuzz-dev libxcb-dri3-dev libusb-1.0-0-dev     \
         libopenjp2-7-dev libmodpbase64-dev libnss3-dev libnspr4-dev libcups2-dev libevent-dev libevdev-dev libgcrypt20-dev \
-        libcurl4-openssl-dev libzstd-dev fonts-ipafont-gothic fonts-ipafont-mincho && \
-    git config --global user.email $USER_EMAIL && \
+        libcurl4-openssl-dev libzstd-dev fonts-ipafont-gothic fonts-ipafont-mincho devscripts
+
+RUN git config --global user.email $USER_EMAIL && \
     git config --global user.name $USER_NAME && \
-    git config --global http.version HTTP/1.1
+    git config --global http.version HTTP/1.1 && \
+    git config --global http.postBuffer 1048576000 && \
+    git config --global https.postBuffer 1048576000 && \
+    git config --global init.defaultBranch master
+# I hate political correctness
 
 # Get patches and sysroot conf
 RUN git clone --depth=1 https://github.com/rockos-riscv/cross-script-chromium $SCRIPT_DIR
 
 # Get depot_tools
 RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-RUN echo 'export PATH='$WORKSPACE'/depot_tools:$PATH' >> ~/.bashrc 
+RUN echo 'export PATH='$WORKSPACE'/depot_tools:$PATH' >> ~/.bashrc
 ENV PATH="$WORKSPACE/depot_tools:$PATH"
 
 # Get Source Code
-# TODO: Use rockos source repo and patch the patches seperately
-RUN git clone --depth=1 https://github.com/rockos-riscv/chromium-129.0.6668.100 $CHROMIUM_DIR && \
-    cd $CHROMIUM_DIR && \
-    git remote add sakura286 https://github.com/Sakura286/chromium-rokcos.git && \
+RUN dget -u https://fast-mirror.isrc.ac.cn/rockos/dev/rockos-gles/pool/main/c/chromium/chromium_129.0.6668.100-1rockos3%2Bgles2.dsc
+RUN cd chromium-129.0.6668.100 && git init && git add . && git commit -m "init"
+RUN git remote add sakura286 https://github.com/Sakura286/chromium-rokcos.git && \
     git fetch sakura286 && \
-    git switch -c cross-build sakura286/master
+    git cherry-pick 0b9337ce8e..f0b7a21ec2 || git add . && git -c core.editor=true cherry-pick --continue
 RUN $CHROMIUM_DIR/build/install-build-deps.sh
 
 # Prepare Sysroot
 ## (1) Patch multistrap
 RUN patch -p0 /usr/sbin/multistrap $SCRIPT_DIR/multistrap-auth.patch
-WORKDIR $CHROMIUM_DIR 
+WORKDIR $CHROMIUM_DIR
 ## (2) Get riscv64 sysroot
-### You can also run
-###   multistrap -a riscv64 -d build/linux/debian_sid_riscv64-sysroot -f $SCRIPT_DIR/sysroot-riscv64.conf
-### to get riscv64 sysroot here
-RUN cd build/linux/ && \
-    wget http://etherpad.sakura286.ink/share/debian_sid_riscv64-sysroot-0110.tar.gz && \
-    tar xf debian_sid_riscv64-sysroot-0110.tar.gz && \
-    cd debian_sid_riscv64-sysroot && \
+RUN multistrap -a riscv64 -d build/linux/debian_sid_riscv64-sysroot -f $SCRIPT_DIR/sysroot-riscv64.conf
+RUN cd build/linux/debian_sid_riscv64-sysroot && \
     mv usr/lib/riscv64-linux-gnu/pkgconfig/* usr/lib/pkgconfig/ && \
-    rm -f usr/bin/python* 
+    rm -f usr/bin/python*
 ## (3) Get amd64 chroot
 ### TODO: Check bookwork and bullseye chroot define in gn files
-RUN multistrap -a amd64 -d build/linux/debian_bookworm_amd64-sysroot -f $SCRIPT_DIR/sysroot-amd64.conf 
+RUN multistrap -a amd64 -d build/linux/debian_bookworm_amd64-sysroot -f $SCRIPT_DIR/sysroot-amd64.conf
 RUN cd build/linux/debian_bookworm_amd64-sysroot && \
     mv usr/lib/x86_64-linux-gnu/pkgconfig/* usr/lib/pkgconfig/ && \
     rm -f usr/bin/python* && \
@@ -81,7 +85,6 @@ RUN mkdir -p third_party/llvm-build-tools && \
 # Build LLVM, then rust
 WORKDIR $CHROMIUM_DIR
 RUN tools/clang/scripts/package.py
-RUN git pull sakura286
 RUN tools/rust/package_rust.py
 
 # Build GN
